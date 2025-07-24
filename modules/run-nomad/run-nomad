@@ -267,6 +267,7 @@ function generate_nomad_config {
   local -r vault_token="${12}"
   local -r cluster_tag_value="${13}"
   local -r node_class="${14}"
+  local -r node_name="${15}"
 
   local readonly config_path="$config_dir/$NOMAD_CONFIG_FILE"
 
@@ -293,11 +294,12 @@ function generate_nomad_config {
       cat <<EOF
 server {
   enabled = true
-  bootstrap_expect = $num_servers
+  bootstrap_expect = $num_servers 
 }
 EOF
     )
-    instance_id="$cluster_tag_value-$instance_id"
+   # instance_id="$cluster_tag_value-$instance_id"
+  log_info "Using node_name=\"$node_name\" (strategy: $naming_strategy)" 
 
   fi
 
@@ -326,7 +328,7 @@ client {
 EOF
       )
     
-    instance_id="$cluster_tag_value-$instance_id"
+   # instance_id="$cluster_tag_value-$instance_id"
   fi
 
   local acl_configuration=""
@@ -419,7 +421,7 @@ EOF
   log_info "Creating default Nomad config file in $config_path"
   cat >"$config_path" <<EOF
 datacenter = "$availability_zone"
-name       = "$instance_id"
+name       = "$node_name"
 region     = "$instance_region"
 bind_addr  = "0.0.0.0"
 advertise {
@@ -519,10 +521,35 @@ function get_owner_of_path {
   ls -ld "$path" | awk '{print $3}'
 }
 
+function compute_node_name {
+  local naming_strategy="$1"
+  local node_prefix="$2"
+  local base
+  case "$naming_strategy" in
+    instance-id)
+      base="$(aws_get_instance_id)"
+      ;;
+    instance-ip)
+      base="$(aws_wrapper_get_hostname | cut -d. -f1)"
+      ;;
+    *)
+      log_error "Invalid naming_strategy: '$naming_strategy'. Must be 'instance-id' or 'instance-ip'."
+      exit 1
+      ;;
+  esac
+  if [[ -n "$node_prefix" ]]; then
+    echo "${node_prefix}-${base}"
+  else
+    echo "$base"
+  fi
+}
+
 function run {
   local server="false"
   local client="false"
   local num_servers=""
+  local naming_strategy="instance-id"  # default
+  local node_prefix=""
   local config_dir=""
   local data_dir=""
   local bin_dir=""
@@ -549,6 +576,16 @@ function run {
       ;;
     --num-servers)
       num_servers="$2"
+      shift
+      ;;
+    --naming-strategy)
+      assert_not_empty "$key" "$2"
+      naming_strategy="$2"
+      shift
+      ;;
+    --node-prefix)
+      assert_not_empty "$key" "$2"
+      node_prefix="$2"
       shift
       ;;
     --config-dir)
@@ -679,6 +716,8 @@ function run {
 
     esac
   fi
+  node_name="$(compute_node_name "$naming_strategy" "$node_prefix")"
+  log_info "computed node_name=\"$node_name\" (strategy=$naming_strategy, prefix=$node_prefix)"
 
   if [[ "$server" == "true" ]]; then
     assert_not_empty "--num-servers" "$num_servers"
@@ -734,7 +773,7 @@ function run {
   if [[ "$skip_nomad_config" == "true" ]]; then
     log_info "The --skip-nomad-config flag is set, so will not generate a default Nomad config file."
   else
-    generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class"
+    generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class" "$node_name"
   fi
 
   generate_systemd_config "$SYSTEMD_CONFIG_PATH" "$config_dir" "$data_dir" "$bin_dir" "$systemd_stdout" "$systemd_stderr" "$user" "$use_sudo" "${environment[@]}"
