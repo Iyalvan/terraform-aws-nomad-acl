@@ -286,7 +286,7 @@ function generate_nomad_config {
   instance_id=$(get_instance_id "$metadata_token")
   instance_ip_address=$(get_instance_ip_address "$metadata_token")
   instance_region=$(get_instance_region "$metadata_token")
-  availability_zone=$(get_instance_availability_zone "$metadata_token")
+  instance_availability_zone=$(get_instance_availability_zone "$metadata_token")
 
   local server_config=""
   if [[ "$server" == "true" ]]; then
@@ -420,7 +420,7 @@ EOF
 
   log_info "Creating default Nomad config file in $config_path"
   cat >"$config_path" <<EOF
-datacenter = "$availability_zone"
+datacenter = "$instance_availability_zone"
 name       = "$node_name"
 region     = "$instance_region"
 bind_addr  = "0.0.0.0"
