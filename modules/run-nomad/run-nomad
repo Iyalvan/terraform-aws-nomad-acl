@@ -268,6 +268,10 @@ function generate_nomad_config {
   local -r cluster_tag_value="${13}"
   local -r node_class="${14}"
   local -r node_name="${15}"
+  local -r jwt_service_auth_method="${16}"
+  local -r jwt_task_auth_method="${17}"
+  local -r enable_consul_service_identity="${18:-false}"
+  local -r enable_consul_task_identity="${19:-false}"
 
   local readonly config_path="$config_dir/$NOMAD_CONFIG_FILE"
 
@@ -354,8 +358,56 @@ EOF
       consul_config=$(
         cat <<EOF
 consul {
-  address = "127.0.0.1:8500",
+  address = "127.0.0.1:8500"
   token = "$(read_acl_token "$consul_cluster_tag_value" "nomad" "$aws_region" 1 0)"
+EOF
+      )
+      if [[ "$client" == "true" && ! -z "$jwt_service_auth_method" ]]; then
+        log_info "Setting nomad client JWT service auth method for consul"
+      consul_config+=$(
+        cat <<EOF
+        
+  service_auth_method = "$jwt_service_auth_method"
+EOF
+      )
+      fi
+      if [[ "$client" == "true" && ! -z "$jwt_task_auth_method" ]]; then
+        log_info "Setting nomad client JWT task auth method for consul"
+      consul_config+=$(
+        cat <<EOF
+
+  task_auth_method = "$jwt_task_auth_method"
+EOF
+      )
+      fi
+      if [[ "$server" == "true" && "$enable_consul_service_identity" == "true" ]]; then
+        log_info "Setting nomad server JWT service identity for consul"
+      consul_config+=$(
+        cat <<EOF
+
+  service_identity {
+    aud = ["consul.io"]
+    ttl = "1h"
+  }
+EOF
+      )
+      fi
+      if [[ "$server" == "true" && "$enable_consul_task_identity" == "true" ]]; then
+        log_info "Setting nomad server JWT task identity for consul"
+      consul_config+=$(
+        cat <<EOF
+
+  task_identity {
+    name = "consul_default"
+    aud = ["consul.io"]
+    ttl = "1h"
+  }
+EOF
+      )
+      fi
+      consul_config+=$(
+      cat <<EOF
+
 }
 EOF
       )
@@ -563,6 +615,8 @@ function run {
   local consul_cluster_tag_value=""
   local vault_addr=""
   local enable_vault="false"
+  local enable_consul_service_identity="false"
+  local enable_consul_task_identity="false"
 
   while [[ $# > 0 ]]; do
     local key="$1"
@@ -670,6 +724,22 @@ function run {
     --enable-acl)
       enable_acl="true"
       ;;
+    --jwt-service-auth-method)
+      assert_not_empty "$key" "$2"
+      jwt_service_auth_method="$2"
+      shift
+      ;;
+    --jwt-task-auth-method)
+      assert_not_empty "$key" "$2"
+      jwt_task_auth_method="$2"
+      shift
+      ;;
+    --enable-consul-service-identity)
+      enable_consul_service_identity="true"
+      ;;
+    --enable-consul-task-identity)
+      enable_consul_task_identity="true"
+      ;;
     --enable-vault)
       enable_vault="true"
       ;;
@@ -773,7 +843,7 @@ function run {
   if [[ "$skip_nomad_config" == "true" ]]; then
     log_info "The --skip-nomad-config flag is set, so will not generate a default Nomad config file."
   else
-    generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class" "$node_name"
+    generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class" "$node_name" "$jwt_service_auth_method" "$jwt_task_auth_method" "$enable_consul_service_identity" "$enable_consul_task_identity"
   fi
 
   generate_systemd_config "$SYSTEMD_CONFIG_PATH" "$config_dir" "$data_dir" "$bin_dir" "$systemd_stdout" "$systemd_stderr" "$user" "$use_sudo" "${environment[@]}"
