@@ -279,6 +279,10 @@ function generate_nomad_config {
   local -r vault_default_identity_ttl="${22}"
   local -r vault_default_identity_env="${23:-false}"
   local -r vault_default_identity_file="${24:-false}"
+  local -r consul_default_identity_aud="${25}"
+  local -r consul_default_identity_ttl="${26}"
+  local -r consul_default_identity_env="${27:-false}"
+  local -r consul_default_identity_file="${28:-false}"
 
   local readonly config_path="$config_dir/$NOMAD_CONFIG_FILE"
 
@@ -389,28 +393,77 @@ EOF
       fi
       if [[ "$server" == "true" && "$enable_consul_service_identity" == "true" ]]; then
         log_info "Setting nomad server JWT service identity for consul"
-      consul_config+=$(
-        cat <<EOF
+        local consul_service_identity_config=""
+        consul_service_identity_config+=$(
+          cat <<EOF
 
   service_identity {
-    aud = ["consul.io"]
-    ttl = "1h"
+EOF
+        )
+        if [[ ! -z "$consul_default_identity_aud" ]]; then
+          consul_service_identity_config+=$(
+            cat <<EOF
+    aud = ["$consul_default_identity_aud"]
+EOF
+          )
+        fi
+        if [[ ! -z "$consul_default_identity_ttl" ]]; then
+          consul_service_identity_config+=$(
+            cat <<EOF
+    ttl = "$consul_default_identity_ttl"
+EOF
+          )
+        fi
+        consul_service_identity_config+=$(
+          cat <<EOF
   }
 EOF
-      )
+        )
+        consul_config+="$consul_service_identity_config"
       fi
       if [[ "$server" == "true" && "$enable_consul_task_identity" == "true" ]]; then
         log_info "Setting nomad server JWT task identity for consul"
-      consul_config+=$(
-        cat <<EOF
+        local consul_task_identity_config=""
+        consul_task_identity_config+=$(
+          cat <<EOF
 
   task_identity {
-    name = "consul_default"
-    aud = ["consul.io"]
-    ttl = "1h"
+EOF
+        )
+        if [[ ! -z "$consul_default_identity_aud" ]]; then
+          consul_task_identity_config+=$(
+            cat <<EOF
+    aud = ["$consul_default_identity_aud"]
+EOF
+          )
+        fi
+        if [[ "$consul_default_identity_env" == "true" ]]; then
+          consul_task_identity_config+=$(
+            cat <<EOF
+    env = true
+EOF
+          )
+        fi
+        if [[ "$consul_default_identity_file" == "true" ]]; then
+          consul_task_identity_config+=$(
+            cat <<EOF
+    file = true
+EOF
+          )
+        fi
+        if [[ ! -z "$consul_default_identity_ttl" ]]; then
+          consul_task_identity_config+=$(
+            cat <<EOF
+    ttl = "$consul_default_identity_ttl"
+EOF
+          )
+        fi
+        consul_task_identity_config+=$(
+          cat <<EOF
   }
 EOF
-      )
+        )
+        consul_config+="$consul_task_identity_config"
       fi
       consul_config+=$(
       cat <<EOF
@@ -445,6 +498,7 @@ EOF
     if [[ "$nomad_major_version" -eq 1 ]] && [[ "$nomad_minor_version" -ge 10 ]]; then
       vault_config+=$(
         cat <<EOF
+
   jwt_auth_backend_path = "$vault_jwt_path"
 
 EOF
@@ -455,7 +509,6 @@ EOF
 }
 EOF
       )
-
     else
       log_info "generating vault server config"
   if [[ "$nomad_major_version" -eq 1 ]] && [[ "$nomad_minor_version" -ge 10 ]]; then
@@ -470,7 +523,7 @@ EOF
           default_identity_config+=$(
             cat <<EOF
 
-aud = ["$vault_default_identity_aud"]
+    aud = ["$vault_default_identity_aud"]
 EOF
           )
         fi
@@ -479,7 +532,7 @@ EOF
           default_identity_config+=$(
             cat <<EOF
 
-env = true
+    env = true
 EOF
           )
         fi
@@ -487,7 +540,7 @@ EOF
           default_identity_config+=$(
             cat <<EOF
 
-file = true
+    file = true
 EOF
           )
         fi
@@ -495,7 +548,7 @@ EOF
           default_identity_config+=$(
             cat <<EOF
 
-ttl = "$vault_default_identity_ttl"
+    ttl = "$vault_default_identity_ttl"
 EOF
           )
         fi
@@ -701,6 +754,10 @@ function run {
   local vault_default_identity_ttl=""
   local vault_default_identity_env="false"
   local vault_default_identity_file="false"
+  local consul_default_identity_aud=""
+  local consul_default_identity_ttl=""
+  local consul_default_identity_env="false"
+  local consul_default_identity_file="false"
 
   while [[ $# > 0 ]]; do
     local key="$1"
@@ -823,6 +880,22 @@ function run {
       ;;
     --enable-consul-task-identity)
       enable_consul_task_identity="true"
+      ;;
+    --consul-default-identity-aud)
+      assert_not_empty "$key" "$2"
+      consul_default_identity_aud="$2"
+      shift
+      ;;
+    --consul-default-identity-ttl)
+      assert_not_empty "$key" "$2"
+      consul_default_identity_ttl="$2"
+      shift
+      ;;
+    --consul-default-identity-env)
+      consul_default_identity_env="true"
+      ;;
+    --consul-default-identity-file)
+      consul_default_identity_file="true"
       ;;
     --enable-vault)
       enable_vault="true"
@@ -957,7 +1030,7 @@ function run {
   if [[ "$skip_nomad_config" == "true" ]]; then
     log_info "The --skip-nomad-config flag is set, so will not generate a default Nomad config file."
   else
-    generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class" "$node_name" "$jwt_service_auth_method" "$jwt_task_auth_method" "$enable_consul_service_identity" "$enable_consul_task_identity" "$vault_jwt_path" "$vault_default_identity_aud" "$vault_default_identity_ttl" "$vault_default_identity_env" "$vault_default_identity_file"
+  generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class" "$node_name" "$jwt_service_auth_method" "$jwt_task_auth_method" "$enable_consul_service_identity" "$enable_consul_task_identity" "$vault_jwt_path" "$vault_default_identity_aud" "$vault_default_identity_ttl" "$vault_default_identity_env" "$vault_default_identity_file" "$consul_default_identity_aud" "$consul_default_identity_ttl" "$consul_default_identity_env" "$consul_default_identity_file"
   fi
 
   generate_systemd_config "$SYSTEMD_CONFIG_PATH" "$config_dir" "$data_dir" "$bin_dir" "$systemd_stdout" "$systemd_stderr" "$user" "$use_sudo" "${environment[@]}"
