@@ -20,6 +20,8 @@ readonly SCRIPT_NAME="$(basename "$0")"
 readonly MAX_RETRIES=30
 readonly SLEEP_BETWEEN_RETRIES_SEC=10
 
+source ${SCRIPT_DIR}/nomad-common.sh
+
 function print_usage {
   echo
   echo "Usage: run-nomad [OPTIONS]"
@@ -268,6 +270,19 @@ function generate_nomad_config {
   local -r cluster_tag_value="${13}"
   local -r node_class="${14}"
   local -r node_name="${15}"
+  local -r jwt_service_auth_method="${16}"
+  local -r jwt_task_auth_method="${17}"
+  local -r enable_consul_service_identity="${18:-false}"
+  local -r enable_consul_task_identity="${19:-false}"
+  local -r vault_jwt_path="${20}"
+  local -r vault_default_identity_aud="${21}"
+  local -r vault_default_identity_ttl="${22}"
+  local -r vault_default_identity_env="${23:-false}"
+  local -r vault_default_identity_file="${24:-false}"
+  local -r consul_default_identity_aud="${25}"
+  local -r consul_default_identity_ttl="${26}"
+  local -r consul_default_identity_env="${27:-false}"
+  local -r consul_default_identity_file="${28:-false}"
 
   local readonly config_path="$config_dir/$NOMAD_CONFIG_FILE"
 
@@ -354,8 +369,105 @@ EOF
       consul_config=$(
         cat <<EOF
 consul {
-  address = "127.0.0.1:8500",
+  address = "127.0.0.1:8500"
   token = "$(read_acl_token "$consul_cluster_tag_value" "nomad" "$aws_region" 1 0)"
+EOF
+      )
+      if [[ "$client" == "true" && ! -z "$jwt_service_auth_method" ]]; then
+        log_info "Setting nomad client JWT service auth method for consul"
+      consul_config+=$(
+        cat <<EOF
+        
+  service_auth_method = "$jwt_service_auth_method"
+EOF
+      )
+      fi
+      if [[ "$client" == "true" && ! -z "$jwt_task_auth_method" ]]; then
+        log_info "Setting nomad client JWT task auth method for consul"
+      consul_config+=$(
+        cat <<EOF
+
+  task_auth_method = "$jwt_task_auth_method"
+EOF
+      )
+      fi
+      if [[ "$server" == "true" && "$enable_consul_service_identity" == "true" ]]; then
+        log_info "Setting nomad server JWT service identity for consul"
+        local consul_service_identity_config=""
+        consul_service_identity_config+=$(
+          cat <<EOF
+
+  service_identity {
+EOF
+        )
+        if [[ ! -z "$consul_default_identity_aud" ]]; then
+          consul_service_identity_config+=$(
+            cat <<EOF
+    aud = ["$consul_default_identity_aud"]
+EOF
+          )
+        fi
+        if [[ ! -z "$consul_default_identity_ttl" ]]; then
+          consul_service_identity_config+=$(
+            cat <<EOF
+    ttl = "$consul_default_identity_ttl"
+EOF
+          )
+        fi
+        consul_service_identity_config+=$(
+          cat <<EOF
+  }
+EOF
+        )
+        consul_config+="$consul_service_identity_config"
+      fi
+      if [[ "$server" == "true" && "$enable_consul_task_identity" == "true" ]]; then
+        log_info "Setting nomad server JWT task identity for consul"
+        local consul_task_identity_config=""
+        consul_task_identity_config+=$(
+          cat <<EOF
+
+  task_identity {
+EOF
+        )
+        if [[ ! -z "$consul_default_identity_aud" ]]; then
+          consul_task_identity_config+=$(
+            cat <<EOF
+    aud = ["$consul_default_identity_aud"]
+EOF
+          )
+        fi
+        if [[ "$consul_default_identity_env" == "true" ]]; then
+          consul_task_identity_config+=$(
+            cat <<EOF
+    env = true
+EOF
+          )
+        fi
+        if [[ "$consul_default_identity_file" == "true" ]]; then
+          consul_task_identity_config+=$(
+            cat <<EOF
+    file = true
+EOF
+          )
+        fi
+        if [[ ! -z "$consul_default_identity_ttl" ]]; then
+          consul_task_identity_config+=$(
+            cat <<EOF
+    ttl = "$consul_default_identity_ttl"
+EOF
+          )
+        fi
+        consul_task_identity_config+=$(
+          cat <<EOF
+  }
+EOF
+        )
+        consul_config+="$consul_task_identity_config"
+      fi
+      consul_config+=$(
+      cat <<EOF
+
 }
 EOF
       )
@@ -380,11 +492,83 @@ vault {
   enabled = true
   address = "$vault_addr"
   create_from_role = "$vault_role"
+
+EOF
+      )
+    if [[ "$nomad_major_version" -eq 1 ]] && [[ "$nomad_minor_version" -ge 10 ]]; then
+      vault_config+=$(
+        cat <<EOF
+
+  jwt_auth_backend_path = "$vault_jwt_path"
+
+EOF
+      )
+      fi
+      vault_config+=$(
+        cat <<EOF
 }
 EOF
       )
     else
       log_info "generating vault server config"
+  if [[ "$nomad_major_version" -eq 1 ]] && [[ "$nomad_minor_version" -ge 10 ]]; then
+        local default_identity_config=""
+        default_identity_config=$(
+          cat <<EOF
+default_identity {
+
+EOF
+        )
+        if [[ ! -z "$vault_default_identity_aud" ]]; then
+          default_identity_config+=$(
+            cat <<EOF
+
+    aud = ["$vault_default_identity_aud"]
+EOF
+          )
+        fi
+
+        if [[ "$vault_default_identity_env" == "true" ]]; then
+          default_identity_config+=$(
+            cat <<EOF
+
+    env = true
+EOF
+          )
+        fi
+        if [[ "$vault_default_identity_file" == "true" ]]; then
+          default_identity_config+=$(
+            cat <<EOF
+
+    file = true
+EOF
+          )
+        fi
+        if [[ ! -z "$vault_default_identity_ttl" ]]; then
+          default_identity_config+=$(
+            cat <<EOF
+
+    ttl = "$vault_default_identity_ttl"
+EOF
+          )
+        fi
+        default_identity_config+=$(
+            cat <<EOF
+
+}
+EOF
+          )
+      vault_config=$(
+      cat <<EOF
+vault {
+  enabled = true
+  $default_identity_config
+}
+EOF
+      )
+
+      fi
+    if [[ "$nomad_major_version" -eq 1 ]] && [[ "$nomad_minor_version" -lt 10 ]]; then
       if [ -z "$vault_token" ] || [ "$vault_token" == "" ]; then
         log_error "You must specify an option for the --vault-token parameter when --enable-vault and --server is specified."
         exit 1
@@ -401,6 +585,7 @@ EOF
       )
     fi
   fi
+fi
 
   local telemetry_config=""
   if [[ "$enable_telemetry" == "true" ]]; then
@@ -563,6 +748,16 @@ function run {
   local consul_cluster_tag_value=""
   local vault_addr=""
   local enable_vault="false"
+  local enable_consul_service_identity="false"
+  local enable_consul_task_identity="false"
+  local vault_default_identity_aud=""
+  local vault_default_identity_ttl=""
+  local vault_default_identity_env="false"
+  local vault_default_identity_file="false"
+  local consul_default_identity_aud=""
+  local consul_default_identity_ttl=""
+  local consul_default_identity_env="false"
+  local consul_default_identity_file="false"
 
   while [[ $# > 0 ]]; do
     local key="$1"
@@ -670,8 +865,61 @@ function run {
     --enable-acl)
       enable_acl="true"
       ;;
+    --jwt-service-auth-method)
+      assert_not_empty "$key" "$2"
+      jwt_service_auth_method="$2"
+      shift
+      ;;
+    --jwt-task-auth-method)
+      assert_not_empty "$key" "$2"
+      jwt_task_auth_method="$2"
+      shift
+      ;;
+    --enable-consul-service-identity)
+      enable_consul_service_identity="true"
+      ;;
+    --enable-consul-task-identity)
+      enable_consul_task_identity="true"
+      ;;
+    --consul-default-identity-aud)
+      assert_not_empty "$key" "$2"
+      consul_default_identity_aud="$2"
+      shift
+      ;;
+    --consul-default-identity-ttl)
+      assert_not_empty "$key" "$2"
+      consul_default_identity_ttl="$2"
+      shift
+      ;;
+    --consul-default-identity-env)
+      consul_default_identity_env="true"
+      ;;
+    --consul-default-identity-file)
+      consul_default_identity_file="true"
+      ;;
     --enable-vault)
       enable_vault="true"
+      ;;
+    --vault-jwt-mount-path)
+      assert_not_empty "$key" "$2"
+      vault_jwt_path="$2"
+      shift
+      ;;
+    --vault-default-identity-aud)
+      assert_not_empty "$key" "$2"
+      vault_default_identity_aud="$2"
+      shift
+      ;;
+    --vault-default-identity-ttl)
+      assert_not_empty "$key" "$2"
+      vault_default_identity_ttl="$2"
+      shift
+      ;;
+    --vault-default-identity-env)
+      vault_default_identity_env="true"
+      ;;
+    --vault-default-identity-file)
+      vault_default_identity_file="true"
       ;;
     --acl-storage-type)
       assert_not_empty "$key" "$2"
@@ -728,15 +976,24 @@ function run {
     exit 1
   fi
 
+  local nomad_major_version=$(get_nomad_major_version)
+  local nomad_minor_version=$(get_nomad_minor_version)
+  
+  #default_identity block is optional so no need to check here though am getting the cli inputs
   if [[ "$server" == "true" ]] && [[ "$enable_vault" == "true" ]]; then
-    assert_not_empty "--vault-addr" "$vault_addr"
-    assert_not_empty "--vault-role" "$vault_role"
-    assert_not_empty "--vault-token" "$vault_token"
+    if [[ "$nomad_major_version" -eq 1 ]] && [[ "$nomad_minor_version" -lt 10 ]]; then
+      assert_not_empty "--vault-addr" "$vault_addr"
+      assert_not_empty "--vault-role" "$vault_role"
+      assert_not_empty "--vault-token" "$vault_token" "Nomad version being < 1.10, --vault-token must be provided when --enable-vault is set on servers"
+    fi
   fi
 
   if [[ "$client" == "true" ]] && [[ "$enable_vault" == "true" ]]; then
     assert_not_empty "--vault-addr" "$vault_addr"
     assert_not_empty "--vault-role" "$vault_role"
+    if [[ "$nomad_major_version" -eq 1 ]] && [[ "$nomad_minor_version" -ge 10 ]]; then
+      assert_not_empty "--vault-jwt-mount-path" "$vault_jwt_path" "Nomad version being >= 1.10, --vault-jwt-mount-path must be provided when --enable-vault is set on servers and token-based authentication is fully deprecated."
+    fi
   fi
 
   if [[ -z "$use_sudo" ]]; then
@@ -773,7 +1030,7 @@ function run {
   if [[ "$skip_nomad_config" == "true" ]]; then
     log_info "The --skip-nomad-config flag is set, so will not generate a default Nomad config file."
   else
-    generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class" "$node_name"
+  generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class" "$node_name" "$jwt_service_auth_method" "$jwt_task_auth_method" "$enable_consul_service_identity" "$enable_consul_task_identity" "$vault_jwt_path" "$vault_default_identity_aud" "$vault_default_identity_ttl" "$vault_default_identity_env" "$vault_default_identity_file" "$consul_default_identity_aud" "$consul_default_identity_ttl" "$consul_default_identity_env" "$consul_default_identity_file"
   fi
 
   generate_systemd_config "$SYSTEMD_CONFIG_PATH" "$config_dir" "$data_dir" "$bin_dir" "$systemd_stdout" "$systemd_stderr" "$user" "$use_sudo" "${environment[@]}"
