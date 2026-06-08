@@ -2,96 +2,84 @@
   "min_packer_version": "0.12.0",
   "variables": {
     "aws_region": "us-east-1",
-    "nomad_version": "1.1.1",
+    "nomad_version": "1.10.0",
     "consul_module_version": "v0.10.1",
-    "consul_version": "1.9.6",
+    "consul_version": "1.21.0",
     "ami_name_prefix": "nomad-consul"
   },
   "builders": [
     {
-      "name": "ubuntu18-ami",
-      "ami_name": "{{user `ami_name_prefix`}}-ubuntu18-{{isotime | clean_resource_name}}",
-      "ami_description": "An example of how to build an Ubuntu 18.04 AMI that has Nomad and Consul installed",
-      "instance_type": "t2.micro",
-      "region": "{{user `aws_region`}}",
-      "type": "amazon-ebs",
-      "source_ami_filter": {
-       "filters": {
-         "virtualization-type": "hvm",
-         "architecture": "x86_64",
-         "name": "ubuntu/images/hvm-ssd/ubuntu-bionic-18.04-amd64-server-*",
-         "block-device-mapping.volume-type": "gp2",
-         "root-device-type": "ebs"
-       },
-       "owners": [
-         "099720109477"
-       ],
-       "most_recent": true
-      },
-      "ssh_username": "ubuntu"
-    },
-    {
-      "ami_name": "{{user `ami_name_prefix`}}-ubuntu-{{isotime | clean_resource_name}}",
-      "ami_description": "An Ubuntu 16.04 AMI that has Nomad and Consul installed.",
-      "instance_type": "t2.micro",
-      "name": "ubuntu16-ami",
+      "name": "ubuntu22-ami",
+      "ami_name": "{{user `ami_name_prefix`}}-ubuntu22-{{isotime | clean_resource_name}}",
+      "ami_description": "An example of how to build an Ubuntu 22.04 AMI that has Nomad and Consul installed",
+      "instance_type": "t3.micro",
       "region": "{{user `aws_region`}}",
       "type": "amazon-ebs",
       "source_ami_filter": {
         "filters": {
           "virtualization-type": "hvm",
           "architecture": "x86_64",
-          "name": "*ubuntu-xenial-16.04-amd64-server-*",
-          "block-device-mapping.volume-type": "gp2",
+          "name": "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*",
           "root-device-type": "ebs"
         },
-        "owners": [
-          "099720109477"
-        ],
+        "owners": ["099720109477"],
         "most_recent": true
       },
       "ssh_username": "ubuntu"
     },
     {
-      "ami_name": "{{user `ami_name_prefix`}}-amazon-linux-2-amd64-{{isotime | clean_resource_name}}",
-      "ami_description": "An Amazon Linux 2 x86_64 AMI that has Nomad and Consul installed.",
-      "instance_type": "t2.micro",
-      "name": "amazon-linux-2-amd64-ami",
+      "name": "ubuntu24-ami",
+      "ami_name": "{{user `ami_name_prefix`}}-ubuntu24-{{isotime | clean_resource_name}}",
+      "ami_description": "An example of how to build an Ubuntu 24.04 AMI that has Nomad and Consul installed",
+      "instance_type": "t3.micro",
       "region": "{{user `aws_region`}}",
       "type": "amazon-ebs",
       "source_ami_filter": {
         "filters": {
           "virtualization-type": "hvm",
           "architecture": "x86_64",
-          "name": "*amzn2-ami-hvm-*",
-          "block-device-mapping.volume-type": "gp2",
+          "name": "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*",
           "root-device-type": "ebs"
         },
-        "owners": [
-          "amazon"
-        ],
+        "owners": ["099720109477"],
+        "most_recent": true
+      },
+      "ssh_username": "ubuntu"
+    },
+    {
+      "name": "amazon-linux-2023-amd64-ami",
+      "ami_name": "{{user `ami_name_prefix`}}-amazon-linux-2023-amd64-{{isotime | clean_resource_name}}",
+      "ami_description": "An Amazon Linux 2023 x86_64 AMI that has Nomad and Consul installed.",
+      "instance_type": "t3.micro",
+      "region": "{{user `aws_region`}}",
+      "type": "amazon-ebs",
+      "source_ami_filter": {
+        "filters": {
+          "virtualization-type": "hvm",
+          "architecture": "x86_64",
+          "name": "al2023-ami-2023.*-x86_64",
+          "root-device-type": "ebs"
+        },
+        "owners": ["amazon"],
         "most_recent": true
       },
       "ssh_username": "ec2-user"
     },
     {
-      "ami_name": "{{user `ami_name_prefix`}}-amazon-linux-2-arm64-{{isotime | clean_resource_name}}",
-      "ami_description": "An Amazon Linux 2 ARM64 AMI that has Nomad and Consul installed.",
+      "name": "amazon-linux-2023-arm64-ami",
+      "ami_name": "{{user `ami_name_prefix`}}-amazon-linux-2023-arm64-{{isotime | clean_resource_name}}",
+      "ami_description": "An Amazon Linux 2023 ARM64 AMI that has Nomad and Consul installed.",
       "instance_type": "t4g.micro",
-      "name": "amazon-linux-2-arm64-ami",
       "region": "{{user `aws_region`}}",
       "type": "amazon-ebs",
       "source_ami_filter": {
         "filters": {
           "virtualization-type": "hvm",
           "architecture": "arm64",
-          "name": "*amzn2-ami-hvm-*",
-          "block-device-mapping.volume-type": "gp2",
+          "name": "al2023-ami-2023.*-arm64",
           "root-device-type": "ebs"
         },
-        "owners": [
-          "amazon"
-        ],
+        "owners": ["amazon"],
         "most_recent": true
       },
       "ssh_username": "ec2-user"
@@ -100,23 +88,13 @@
   "provisioners": [
     {
       "type": "shell",
-      "inline": [
-        "sudo apt-get install -y git"
-      ],
-      "only": [
-        "ubuntu16-ami",
-        "ubuntu18-ami"
-      ]
+      "inline": ["sudo apt-get update -y", "sudo apt-get install -y git"],
+      "only": ["ubuntu22-ami", "ubuntu24-ami"]
     },
     {
       "type": "shell",
-      "inline": [
-        "sudo yum install -y git"
-      ],
-      "only": [
-        "amazon-linux-2-amd64-ami",
-        "amazon-linux-2-arm64-ami"
-      ]
+      "inline": ["sudo yum install -y git"],
+      "only": ["amazon-linux-2023-amd64-ami", "amazon-linux-2023-arm64-ami"]
     },
     {
       "type": "shell",
@@ -128,7 +106,7 @@
       "source": "{{template_dir}}/../../",
       "destination": "/tmp/terraform-aws-nomad"
     },
-      {
+    {
       "type": "shell",
       "environment_vars": [
         "NOMAD_VERSION={{user `nomad_version`}}",
@@ -139,4 +117,3 @@
     }
   ]
 }
-

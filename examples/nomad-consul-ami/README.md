@@ -5,9 +5,9 @@ the [install-consul module](https://github.com/hashicorp/terraform-aws-consul/tr
 from the Consul AWS Module with [Packer](https://www.packer.io/) to create [Amazon Machine Images
 (AMIs)](http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIs.html) that have Nomad and Consul installed on top of:
 
-1. Ubuntu 16.04
-1. Ubuntu 18.04
-1. Amazon Linux 2
+1. Amazon Linux 2023
+1. Ubuntu 22.04
+1. Ubuntu 24.04
 
 These AMIs will have [Consul](https://www.consul.io/) and [Nomad](https://www.nomadproject.io/) installed and
 configured to automatically join a cluster during boot-up.
