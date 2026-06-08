@@ -30,8 +30,9 @@ output "asg_name_clients" {
   value = module.clients.asg_name
 }
 
-output "launch_config_name_clients" {
-  value = module.clients.launch_config_name
+# clients run on the nomad-cluster module, which now uses a launch template (not a launch config)
+output "launch_template_name_clients" {
+  value = module.clients.launch_template_name
 }
 
 output "iam_role_arn_clients" {
