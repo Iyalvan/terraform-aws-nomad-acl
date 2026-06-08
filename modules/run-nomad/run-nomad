@@ -400,7 +400,10 @@ EOF
         cat <<EOF
 consul {
   address = "127.0.0.1:8500"
-  token = "$(read_acl_token "$consul_cluster_tag_value" "nomad" "$aws_region" 1 0)"
+  # retry (default 60x5s) instead of a single shot: when the nomad servers run on a separate asg from
+  # the consul cluster, the consul "nomad" token may not be in ssm the instant we read it (it is minted
+  # right after consul acl bootstrap). a single try (was: 1 0) raced and aborted the box.
+  token = "$(read_acl_token "$consul_cluster_tag_value" "nomad" "$aws_region")"
 $consul_wi_config
 }
 EOF
