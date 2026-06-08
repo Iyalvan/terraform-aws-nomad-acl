@@ -47,6 +47,7 @@ function print_usage {
   echo -e "  --tls-key-file\tPath to the agent private key file on the instance. Required if --enable-tls is set."
   echo -e "  --enable-gossip-encryption\tIf set, encrypt the server gossip (serf) traffic. Optional. Requires --gossip-encryption-key. Default is off."
   echo -e "  --gossip-encryption-key\tThe base64 gossip encryption key. Required if --enable-gossip-encryption is set."
+  echo -e "  --enable-consul-wi\tIf set, add Consul workload identity (service + task) defaults so jobs get scoped Consul tokens via JWT instead of the agent token. Optional. Default is off (token-based). Requires a Consul JWT auth method (see examples/nomad-consul-workload-identity)."
   echo
   echo "Example:"
   echo
@@ -280,6 +281,7 @@ function generate_nomad_config {
   local -r tls_key_file="${19}"
   local -r enable_gossip_encryption="${20:-false}"
   local -r gossip_encryption_key="${21}"
+  local -r enable_consul_wi="${22:-false}"
 
   local readonly config_path="$config_dir/$NOMAD_CONFIG_FILE"
 
@@ -362,6 +364,28 @@ EOF
     )
   fi
 
+  # optional consul workload identity defaults for jobs. additive: the agent still
+  # uses its own token below; only workloads switch to JWT-issued consul tokens.
+  # a consul jwt auth method must trust nomad's jwks endpoint (see the
+  # examples/nomad-consul-workload-identity terraform), and the audience here must
+  # match that auth method's bound audiences.
+  local consul_wi_config=""
+  if [[ "$enable_consul_wi" == "true" ]]; then
+    log_info "Adding consul workload identity (service + task) defaults"
+    consul_wi_config=$(
+      cat <<EOF
+  service_identity {
+    aud = ["consul.io"]
+    ttl = "1h"
+  }
+  task_identity {
+    aud = ["consul.io"]
+    ttl = "1h"
+  }
+EOF
+    )
+  fi
+
   local consul_config=""
   if [[ "$enable_acl" == "true" ]]; then
     local -r aws_region=$(aws_get_instance_region)
@@ -373,8 +397,9 @@ EOF
       consul_config=$(
         cat <<EOF
 consul {
-  address = "127.0.0.1:8500",
+  address = "127.0.0.1:8500"
   token = "$(read_acl_token "$consul_cluster_tag_value" "nomad" "$aws_region" 1 0)"
+$consul_wi_config
 }
 EOF
       )
@@ -383,8 +408,9 @@ EOF
     consul_config=$(
       cat <<EOF
 consul {
- address = "127.0.0.1:8500"
- }
+  address = "127.0.0.1:8500"
+$consul_wi_config
+}
 EOF
     )
   fi
@@ -610,6 +636,7 @@ function run {
   local tls_key_file=""
   local enable_gossip_encryption="false"
   local gossip_encryption_key=""
+  local enable_consul_wi="false"
 
   while [[ $# > 0 ]]; do
     local key="$1"
@@ -751,6 +778,9 @@ function run {
       gossip_encryption_key="$2"
       shift
       ;;
+    --enable-consul-wi)
+      enable_consul_wi="true"
+      ;;
     --help)
       print_usage
       exit
@@ -856,7 +886,7 @@ function run {
   if [[ "$skip_nomad_config" == "true" ]]; then
     log_info "The --skip-nomad-config flag is set, so will not generate a default Nomad config file."
   else
-    generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class" "$node_name" "$enable_tls" "$tls_ca_file" "$tls_cert_file" "$tls_key_file" "$enable_gossip_encryption" "$gossip_encryption_key"
+    generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class" "$node_name" "$enable_tls" "$tls_ca_file" "$tls_cert_file" "$tls_key_file" "$enable_gossip_encryption" "$gossip_encryption_key" "$enable_consul_wi"
   fi
 
   generate_systemd_config "$SYSTEMD_CONFIG_PATH" "$config_dir" "$data_dir" "$bin_dir" "$systemd_stdout" "$systemd_stderr" "$user" "$use_sudo" "${environment[@]}"
