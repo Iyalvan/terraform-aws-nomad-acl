@@ -48,6 +48,8 @@ function print_usage {
   echo -e "  --enable-gossip-encryption\tIf set, encrypt the server gossip (serf) traffic. Optional. Requires --gossip-encryption-key. Default is off."
   echo -e "  --gossip-encryption-key\tThe base64 gossip encryption key. Required if --enable-gossip-encryption is set."
   echo -e "  --enable-consul-wi\tIf set, add Consul workload identity (service + task) defaults so jobs get scoped Consul tokens via JWT instead of the agent token. Optional. Default is off (token-based). Requires a Consul JWT auth method (see examples/nomad-consul-workload-identity)."
+  echo -e "  --enable-vault\tIf set, enable Vault integration using workload identity (JWT). Optional. Requires --vault-addr and a Vault JWT auth method/role (see examples/nomad-vault-workload-identity). Default is off. The legacy --vault-role and --vault-token are ignored (Nomad 1.10 removed token-based Vault auth)."
+  echo -e "  --vault-addr\t\tThe address of the Vault server. Required if --enable-vault is set."
   echo
   echo "Example:"
   echo
@@ -415,36 +417,26 @@ EOF
     )
   fi
 
+  # vault integration is opt-in. nomad 1.10 removed token-based vault auth, so when
+  # enabled we use workload identity: nomad signs a jwt per task and vault exchanges
+  # it for a scoped token via a jwt auth method/role (see examples/nomad-vault-workload-identity).
+  # the audience must match that vault role's bound_audiences. servers no longer need a
+  # vault token, and the same config is used for servers and clients.
   local vault_config=""
   if [[ "$enable_vault" == "true" ]]; then
-    if [[ "$client" == "true" ]]; then
-      log_info "generating vault client config"
-      vault_config=$(
-        cat <<EOF
+    log_info "generating vault workload identity config"
+    vault_config=$(
+      cat <<EOF
 vault {
   enabled = true
   address = "$vault_addr"
-  create_from_role = "$vault_role"
+  default_identity {
+    aud = ["vault.io"]
+    ttl = "1h"
+  }
 }
 EOF
-      )
-    else
-      log_info "generating vault server config"
-      if [ -z "$vault_token" ] || [ "$vault_token" == "" ]; then
-        log_error "You must specify an option for the --vault-token parameter when --enable-vault and --server is specified."
-        exit 1
-      fi
-      vault_config=$(
-        cat <<EOF
-vault {
-  enabled = true
-  address = "$vault_addr"
-  token   = "$vault_token"
-  create_from_role = "$vault_role"
-}
-EOF
-      )
-    fi
+    )
   fi
 
   local telemetry_config=""
@@ -831,15 +823,10 @@ function run {
     exit 1
   fi
 
-  if [[ "$server" == "true" ]] && [[ "$enable_vault" == "true" ]]; then
+  # vault workload identity needs only the address; --vault-role and --vault-token
+  # are no longer used (nomad 1.10 removed token-based vault auth) and are ignored.
+  if [[ "$enable_vault" == "true" ]]; then
     assert_not_empty "--vault-addr" "$vault_addr"
-    assert_not_empty "--vault-role" "$vault_role"
-    assert_not_empty "--vault-token" "$vault_token"
-  fi
-
-  if [[ "$client" == "true" ]] && [[ "$enable_vault" == "true" ]]; then
-    assert_not_empty "--vault-addr" "$vault_addr"
-    assert_not_empty "--vault-role" "$vault_role"
   fi
 
   if [[ "$enable_tls" == "true" ]]; then
