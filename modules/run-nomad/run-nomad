@@ -41,6 +41,12 @@ function print_usage {
   echo -e "  --environment\t\A single environment variable in the key/value pair form 'KEY=\"val\"' to pass to Nomad as environment variable when starting it up. Repeat this option for additional variables. Optional."
   echo -e "  --node-class\t\tThe node_class to pass it to Nomad Clients. Optional. valid only if --client is true."
   echo -e "  --skip-nomad-config\tIf this flag is set, don't generate a Nomad configuration file. Optional. Default is false."
+  echo -e "  --enable-tls\t\tIf set, enable TLS (mTLS) for the HTTP and RPC APIs. Optional. Requires --tls-ca-file, --tls-cert-file and --tls-key-file. Default is off."
+  echo -e "  --tls-ca-file\t\tPath to the CA certificate file on the instance. Required if --enable-tls is set."
+  echo -e "  --tls-cert-file\tPath to the agent certificate file on the instance. Required if --enable-tls is set."
+  echo -e "  --tls-key-file\tPath to the agent private key file on the instance. Required if --enable-tls is set."
+  echo -e "  --enable-gossip-encryption\tIf set, encrypt the server gossip (serf) traffic. Optional. Requires --gossip-encryption-key. Default is off."
+  echo -e "  --gossip-encryption-key\tThe base64 gossip encryption key. Required if --enable-gossip-encryption is set."
   echo
   echo "Example:"
   echo
@@ -268,6 +274,12 @@ function generate_nomad_config {
   local -r cluster_tag_value="${13}"
   local -r node_class="${14}"
   local -r node_name="${15}"
+  local -r enable_tls="${16:-false}"
+  local -r tls_ca_file="${17}"
+  local -r tls_cert_file="${18}"
+  local -r tls_key_file="${19}"
+  local -r enable_gossip_encryption="${20:-false}"
+  local -r gossip_encryption_key="${21}"
 
   local readonly config_path="$config_dir/$NOMAD_CONFIG_FILE"
 
@@ -288,13 +300,20 @@ function generate_nomad_config {
   instance_region=$(get_instance_region "$metadata_token")
   availability_zone=$(get_instance_availability_zone "$metadata_token")
 
+  # gossip (serf) encryption is server-only in nomad
+  local gossip_config=""
+  if [[ "$enable_gossip_encryption" == "true" && -n "$gossip_encryption_key" ]]; then
+    gossip_config="encrypt = \"$gossip_encryption_key\""
+  fi
+
   local server_config=""
   if [[ "$server" == "true" ]]; then
     server_config=$(
       cat <<EOF
 server {
   enabled = true
-  bootstrap_expect = $num_servers 
+  bootstrap_expect = $num_servers
+  $gossip_config
 }
 EOF
     )
@@ -418,6 +437,26 @@ EOF
     )
   fi
 
+  # tls applies to both servers and clients; certs must already be present on the
+  # instance (bake into the AMI, drop via user-data, or issue from vault pki)
+  local tls_config=""
+  if [[ "$enable_tls" == "true" ]]; then
+    log_info "Creating TLS configuration"
+    tls_config=$(
+      cat <<EOF
+tls {
+  http = true
+  rpc  = true
+  ca_file   = "$tls_ca_file"
+  cert_file = "$tls_cert_file"
+  key_file  = "$tls_key_file"
+  verify_server_hostname = true
+  verify_https_client    = false
+}
+EOF
+    )
+  fi
+
   log_info "Creating default Nomad config file in $config_path"
   cat >"$config_path" <<EOF
 datacenter = "$availability_zone"
@@ -437,6 +476,8 @@ $vault_config
 $consul_config
 
 $telemetry_config
+
+$tls_config
 EOF
   chown "$user:$user" "$config_path"
 }
@@ -563,6 +604,12 @@ function run {
   local consul_cluster_tag_value=""
   local vault_addr=""
   local enable_vault="false"
+  local enable_tls="false"
+  local tls_ca_file=""
+  local tls_cert_file=""
+  local tls_key_file=""
+  local enable_gossip_encryption="false"
+  local gossip_encryption_key=""
 
   while [[ $# > 0 ]]; do
     local key="$1"
@@ -678,6 +725,32 @@ function run {
       acl_storage_type="$2"
       shift
       ;;
+    --enable-tls)
+      enable_tls="true"
+      ;;
+    --tls-ca-file)
+      assert_not_empty "$key" "$2"
+      tls_ca_file="$2"
+      shift
+      ;;
+    --tls-cert-file)
+      assert_not_empty "$key" "$2"
+      tls_cert_file="$2"
+      shift
+      ;;
+    --tls-key-file)
+      assert_not_empty "$key" "$2"
+      tls_key_file="$2"
+      shift
+      ;;
+    --enable-gossip-encryption)
+      enable_gossip_encryption="true"
+      ;;
+    --gossip-encryption-key)
+      assert_not_empty "$key" "$2"
+      gossip_encryption_key="$2"
+      shift
+      ;;
     --help)
       print_usage
       exit
@@ -739,6 +812,16 @@ function run {
     assert_not_empty "--vault-role" "$vault_role"
   fi
 
+  if [[ "$enable_tls" == "true" ]]; then
+    assert_not_empty "--tls-ca-file" "$tls_ca_file"
+    assert_not_empty "--tls-cert-file" "$tls_cert_file"
+    assert_not_empty "--tls-key-file" "$tls_key_file"
+  fi
+
+  if [[ "$enable_gossip_encryption" == "true" ]]; then
+    assert_not_empty "--gossip-encryption-key" "$gossip_encryption_key"
+  fi
+
   if [[ -z "$use_sudo" ]]; then
     if [[ "$client" == "true" ]]; then
       use_sudo="true"
@@ -773,7 +856,7 @@ function run {
   if [[ "$skip_nomad_config" == "true" ]]; then
     log_info "The --skip-nomad-config flag is set, so will not generate a default Nomad config file."
   else
-    generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class" "$node_name"
+    generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class" "$node_name" "$enable_tls" "$tls_ca_file" "$tls_cert_file" "$tls_key_file" "$enable_gossip_encryption" "$gossip_encryption_key"
   fi
 
   generate_systemd_config "$SYSTEMD_CONFIG_PATH" "$config_dir" "$data_dir" "$bin_dir" "$systemd_stdout" "$systemd_stderr" "$user" "$use_sudo" "${environment[@]}"
