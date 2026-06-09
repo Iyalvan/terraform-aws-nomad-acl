@@ -40,6 +40,7 @@ function print_usage {
   echo -e "  --use-sudo\t\tIf set, run the Nomad agent with sudo. By default, sudo is only used if --client is set."
   echo -e "  --environment\t\A single environment variable in the key/value pair form 'KEY=\"val\"' to pass to Nomad as environment variable when starting it up. Repeat this option for additional variables. Optional."
   echo -e "  --node-class\t\tThe node_class to pass it to Nomad Clients. Optional. valid only if --client is true."
+  echo -e "  --node-pool\t\tThe node_pool to assign Nomad Clients to (Nomad 1.6+). Optional. Valid only if --client is true. Default: the client joins the \"default\" pool."
   echo -e "  --skip-nomad-config\tIf this flag is set, don't generate a Nomad configuration file. Optional. Default is false."
   echo -e "  --enable-tls\t\tIf set, enable TLS (mTLS) for the HTTP and RPC APIs. Optional. Requires --tls-ca-file, --tls-cert-file and --tls-key-file. Default is off."
   echo -e "  --tls-ca-file\t\tPath to the CA certificate file on the instance. Required if --enable-tls is set."
@@ -284,6 +285,7 @@ function generate_nomad_config {
   local -r enable_gossip_encryption="${20:-false}"
   local -r gossip_encryption_key="${21}"
   local -r enable_consul_wi="${22:-false}"
+  local -r node_pool="${23}"
 
   local readonly config_path="$config_dir/$NOMAD_CONFIG_FILE"
 
@@ -336,17 +338,30 @@ EOF
     )
   fi
 
+  # optional node pool for clients (nomad 1.6+). opt-in: empty by default = no node_pool line, so the
+  # client lands in the "default" pool exactly as before.
+  local node_pool_config=""
+  if [[ -n "$node_pool" ]]; then
+    log_info "Setting nomad node pool to $node_pool"
+    node_pool_config=$(
+      cat <<EOF
+node_pool = "$node_pool"
+EOF
+    )
+  fi
+
   local client_config=""
   if [[ "$client" == "true" ]]; then
 
     log_info "Creating client configuration"
 
-    
+
       client_config=$(
         cat <<EOF
 client {
   enabled = true
   $node_class_config
+  $node_pool_config
 }
 EOF
       )
@@ -632,6 +647,7 @@ function run {
   local enable_gossip_encryption="false"
   local gossip_encryption_key=""
   local enable_consul_wi="false"
+  local node_pool=""
 
   while [[ $# > 0 ]]; do
     local key="$1"
@@ -723,6 +739,11 @@ function run {
     --node-class)
       assert_not_empty "$key" "$2"
       node_class="$2"
+      shift
+      ;;
+    --node-pool)
+      assert_not_empty "$key" "$2"
+      node_pool="$2"
       shift
       ;;
     --skip-nomad-config)
@@ -826,6 +847,12 @@ function run {
     exit 1
   fi
 
+  # node pools apply to clients only; fail loudly rather than silently dropping the setting on a server.
+  if [[ -n "$node_pool" && "$client" != "true" ]]; then
+    log_error "--node-pool is only valid with --client"
+    exit 1
+  fi
+
   # vault workload identity needs only the address; --vault-role and --vault-token
   # are no longer used (nomad 1.10 removed token-based vault auth) and are ignored.
   if [[ "$enable_vault" == "true" ]]; then
@@ -876,7 +903,7 @@ function run {
   if [[ "$skip_nomad_config" == "true" ]]; then
     log_info "The --skip-nomad-config flag is set, so will not generate a default Nomad config file."
   else
-    generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class" "$node_name" "$enable_tls" "$tls_ca_file" "$tls_cert_file" "$tls_key_file" "$enable_gossip_encryption" "$gossip_encryption_key" "$enable_consul_wi"
+    generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class" "$node_name" "$enable_tls" "$tls_ca_file" "$tls_cert_file" "$tls_key_file" "$enable_gossip_encryption" "$gossip_encryption_key" "$enable_consul_wi" "$node_pool"
   fi
 
   generate_systemd_config "$SYSTEMD_CONFIG_PATH" "$config_dir" "$data_dir" "$bin_dir" "$systemd_stdout" "$systemd_stderr" "$user" "$use_sudo" "${environment[@]}"

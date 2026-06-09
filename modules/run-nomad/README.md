@@ -80,12 +80,43 @@ The `run-nomad` script accepts the following arguments:
   root-level privileges).
 * `skip-nomad-config`: If this flag is set, don't generate a Nomad configuration file. This is useful if you have
   a custom configuration file and don't want to use any of of the default settings from `run-nomad`.
+* `node-pool` (optional): Assign this client to the named Nomad [node pool](https://developer.hashicorp.com/nomad/docs/architecture/cluster/node-pools)
+  (Nomad 1.6+). Valid only with `--client`; passing it with `--server` is an error. Omit it (the default) and the
+  client joins the built-in `default` pool, exactly as before — so this is fully opt-in. See [Node pools](#node-pools) below.
 
 Example:
 
 ```
 /opt/nomad/bin/run-nomad --server --num-servers 3
 ```
+
+## Node pools
+
+[Node pools](https://developer.hashicorp.com/nomad/docs/architecture/cluster/node-pools) (Nomad 1.6+) group
+client nodes so jobs can target a subset of the fleet (e.g. `batch` vs `service`, GPU nodes). To place a
+client in a pool, run it with `--node-pool <name>`:
+
+```
+/opt/nomad/bin/run-nomad --client --node-pool batch
+```
+
+A job then targets it with a top-level `node_pool = "batch"`. This is optional and opt-in: without the flag a
+client joins the built-in `default` pool and behavior is unchanged. Adopting it is just the one flag on the
+clients you want segmented — no extra cluster setup in the common case, because:
+
+- **Pools auto-create.** When a client registers referencing a pool that doesn't exist yet, Nomad creates it
+  (with default settings) automatically — you do **not** have to pre-create it. **Caveat (multi-region):** this
+  only happens in the *authoritative* region. In a federated cluster, a client in a non-authoritative region
+  stays `initializing` until the pool is created in the authoritative region and replicated. If you run
+  multi-region, create the pool first (see below).
+- `default` and `all` are **reserved** names (`all` is a pseudo-pool meaning every node); don't use them as a
+  custom pool.
+
+If you want a pool with a description/metadata, or (Nomad **Enterprise**) a per-pool scheduler config such as a
+distinct scheduling algorithm or memory oversubscription, define it declaratively with the Terraform `nomad`
+provider's [`nomad_node_pool`](https://registry.terraform.io/providers/hashicorp/nomad/latest/docs/resources/node_pool)
+resource. That is control-plane configuration and lives outside this AMI/module, alongside your other Nomad
+provider resources.
 
 
 
