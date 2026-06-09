@@ -20,13 +20,15 @@ provider "vault" {
   address = var.vault_address
 }
 
-# jwt auth method that trusts nomad's workload identity tokens. mounted at the default "jwt" path so the
-# run-nomad vault block works without extra configuration.
+# jwt auth method that trusts nomad's workload identity tokens. mounted at "jwt-nomad" because that is the
+# path nomad posts to by default (auth/jwt-nomad/login) when enable-vault is set without an explicit
+# jwt_auth_backend_path. default_role lets a workload whose `vault {}` block names no role still log in.
 resource "vault_jwt_auth_backend" "nomad" {
-  path               = "jwt"
+  path               = "jwt-nomad"
   description        = "jwt auth method for nomad workload identity"
   jwks_url           = var.nomad_jwks_url
   jwt_supported_algs = ["RS256", "EdDSA"]
+  default_role       = "nomad-workloads"
 }
 
 # role nomad workloads log in as. bound_audiences must match the audience run-nomad emits ("vault.io").

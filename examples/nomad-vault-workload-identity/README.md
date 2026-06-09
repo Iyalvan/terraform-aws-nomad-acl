@@ -11,8 +11,8 @@ is required and nothing changes for your cluster.
 
 ## What it creates
 
-- a `jwt` Vault auth method (mounted at `jwt`) that trusts Nomad's JWKS endpoint
-- a `nomad-workloads` role with `bound_audiences = ["vault.io"]` (matching what `run-nomad` emits)
+- a Vault JWT auth method mounted at `jwt-nomad` (the path Nomad logs in to by default) that trusts Nomad's JWKS endpoint
+- a `nomad-workloads` role with `bound_audiences = ["vault.io"]` (matching what `run-nomad` emits), set as the method's `default_role`
 
 ## Usage
 
@@ -31,7 +31,7 @@ is required and nothing changes for your cluster.
 ## Notes
 
 - The audience (`vault.io`) must match what `run-nomad` emits.
-- `run-nomad` uses Vault's default JWT mount path (`jwt`); if you mount elsewhere, set
-  `jwt_auth_backend_path` in the Nomad `vault` block accordingly.
+- Nomad logs in at the `jwt-nomad` auth path by default; if you mount the method elsewhere, set
+  `jwt_auth_backend_path` in the Nomad `vault` block to match.
 - Servers and clients no longer need a Vault token. `--vault-role` / `--vault-token` are ignored.
 - This does not create any EC2 resources.
