@@ -27,12 +27,11 @@ resource "consul_acl_auth_method" "nomad_workloads" {
   name           = "nomad-workloads"
   type           = "jwt"
   description    = "login method for nomad workloads using workload identity"
-  max_token_ttl  = "1h"
   token_locality = "local"
 
   config_json = jsonencode({
     JWKSURL          = var.nomad_jwks_url
-    JWTSupportedAlgs = ["RS256", "EdDSA"]
+    JWTSupportedAlgs = ["RS256"]
     BoundAudiences   = ["consul.io"]
     ClaimMappings = {
       nomad_namespace = "nomad_namespace"
