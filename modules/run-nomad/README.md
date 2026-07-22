@@ -80,6 +80,9 @@ The `run-nomad` script accepts the following arguments:
   root-level privileges).
 * `skip-nomad-config`: If this flag is set, don't generate a Nomad configuration file. This is useful if you have
   a custom configuration file and don't want to use any of of the default settings from `run-nomad`.
+* `node-pool` (optional): Assign this client to the named Nomad [node pool](https://developer.hashicorp.com/nomad/docs/architecture/cluster/node-pools)
+  (Nomad 1.6+). Valid only with `--client`; passing it with `--server` is an error. Omit it (the default) and the
+  client joins the built-in `default` pool, exactly as before — so this is fully opt-in. See [Node pools](#node-pools) below.
 
 Example:
 
@@ -87,7 +90,94 @@ Example:
 /opt/nomad/bin/run-nomad --server --num-servers 3
 ```
 
+## Node pools
 
+[Node pools](https://developer.hashicorp.com/nomad/docs/architecture/cluster/node-pools) (Nomad 1.6+) group
+client nodes so jobs can target a subset of the fleet (e.g. `batch` vs `service`, GPU nodes). To place a
+client in a pool, run it with `--node-pool <name>`:
+
+```
+/opt/nomad/bin/run-nomad --client --node-pool batch
+```
+
+A job then targets it with a top-level `node_pool = "batch"`. This is optional and opt-in: without the flag a
+client joins the built-in `default` pool and behavior is unchanged. Adopting it is just the one flag on the
+clients you want segmented — no extra cluster setup in the common case, because:
+
+- **Pools auto-create.** When a client registers referencing a pool that doesn't exist yet, Nomad creates it
+  (with default settings) automatically — you do **not** have to pre-create it. **Caveat (multi-region):** this
+  only happens in the *authoritative* region. In a federated cluster, a client in a non-authoritative region
+  stays `initializing` until the pool is created in the authoritative region and replicated. If you run
+  multi-region, create the pool first (see below).
+- `default` and `all` are **reserved** names (`all` is a pseudo-pool meaning every node); don't use them as a
+  custom pool.
+
+If you want a pool with a description/metadata, or (Nomad **Enterprise**) a per-pool scheduler config such as a
+distinct scheduling algorithm or memory oversubscription, define it declaratively with the Terraform `nomad`
+provider's [`nomad_node_pool`](https://registry.terraform.io/providers/hashicorp/nomad/latest/docs/resources/node_pool)
+resource. That is control-plane configuration and lives outside this AMI/module, alongside your other Nomad
+provider resources.
+
+
+## Workload identity
+
+[Workload identity](https://developer.hashicorp.com/nomad/docs/concepts/workload-identity) (WI) lets Nomad
+issue short-lived JWTs to running workloads so they can authenticate to Consul and Vault without long-lived
+static tokens. `run-nomad` supports three independent integration modes — each is opt-in and can be used
+separately or together.
+
+
+### Agent token (all versions)
+
+The Nomad agent needs a Consul token for its own operations (cluster discovery, service registration). This
+token is read from SSM at boot via `--consul-cluster-tag-value` and written into the agent's `consul { token }`
+block. It is **not** affected by workload identity and is required regardless of whether WI is enabled.
+
+
+### Vault WI (`--enable-vault`)
+
+Nomad 1.10 removed token-based Vault authentication — if you use Vault, WI is mandatory. When `--enable-vault`
+is set, `run-nomad` emits:
+
+```hcl
+vault {
+  enabled = true
+  address = "<--vault-addr>"
+  default_identity {
+    aud = ["vault.io"]
+  }
+}
+```
+
+Servers and clients authenticate to Vault via JWT only; no Vault token is stored on any agent.
+
+The Vault side requires a JWT auth method (mounted at `jwt-nomad` by default) that trusts Nomad's JWKS
+endpoint, plus a role and policies for your workloads. See
+[`examples/nomad-vault-workload-identity`](../../examples/nomad-vault-workload-identity) for the Terraform
+to provision this.
+
+
+### Consul WI (`--enable-consul-wi`, opt-in)
+
+Token-based Consul integration works on all supported versions — `--enable-consul-wi` is an optional upgrade
+for least-privilege. When set, `run-nomad` adds `service_identity` and `task_identity` defaults (audience
+`consul.io`, auth method `nomad-workloads`) to the agent's `consul {}` block, so workloads receive
+per-task scoped Consul tokens via JWT instead of sharing the agent token.
+
+Version-dependent behavior:
+
+* **Nomad 1.10.0–2.0.3:** the workload fallback to the agent's Consul token was removed. Workloads that touch
+  Consul (service registration, KV templates) **require** WI on these versions — without it they fail. Enable
+  `--enable-consul-wi` and provision the auth method before running Consul-aware jobs.
+* **Nomad 2.0.4+:** the fallback was [restored](https://github.com/hashicorp/nomad/issues/28199). Workloads
+  without WI configured fall back to the agent's Consul token automatically. Consul WI is optional but still
+  recommended for least privilege.
+* **Important:** once `--enable-consul-wi` is enabled, workloads rely on WI — there is no fallback to the
+  agent token even on 2.0.4+. The Consul JWT auth method **must** be in place before you enable this flag on
+  the agents.
+
+See [`examples/nomad-consul-workload-identity`](../../examples/nomad-consul-workload-identity) for the
+Consul-side auth method, binding rules, and role Terraform.
 
 
 ## Nomad configuration

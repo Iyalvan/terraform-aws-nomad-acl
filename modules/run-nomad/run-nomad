@@ -40,7 +40,17 @@ function print_usage {
   echo -e "  --use-sudo\t\tIf set, run the Nomad agent with sudo. By default, sudo is only used if --client is set."
   echo -e "  --environment\t\A single environment variable in the key/value pair form 'KEY=\"val\"' to pass to Nomad as environment variable when starting it up. Repeat this option for additional variables. Optional."
   echo -e "  --node-class\t\tThe node_class to pass it to Nomad Clients. Optional. valid only if --client is true."
+  echo -e "  --node-pool\t\tThe node_pool to assign Nomad Clients to (Nomad 1.6+). Optional. Valid only if --client is true. Default: the client joins the \"default\" pool."
   echo -e "  --skip-nomad-config\tIf this flag is set, don't generate a Nomad configuration file. Optional. Default is false."
+  echo -e "  --enable-tls\t\tIf set, enable TLS (mTLS) for the HTTP and RPC APIs. Optional. Requires --tls-ca-file, --tls-cert-file and --tls-key-file. Default is off."
+  echo -e "  --tls-ca-file\t\tPath to the CA certificate file on the instance. Required if --enable-tls is set."
+  echo -e "  --tls-cert-file\tPath to the agent certificate file on the instance. Required if --enable-tls is set."
+  echo -e "  --tls-key-file\tPath to the agent private key file on the instance. Required if --enable-tls is set."
+  echo -e "  --enable-gossip-encryption\tIf set, encrypt the server gossip (serf) traffic. Optional. Requires --gossip-encryption-key. Default is off."
+  echo -e "  --gossip-encryption-key\tThe base64 gossip encryption key. Required if --enable-gossip-encryption is set."
+  echo -e "  --enable-consul-wi\tIf set, add Consul workload identity (service + task) defaults so jobs get scoped Consul tokens via JWT instead of the agent token. Optional. Default is off (token-based). Requires a Consul JWT auth method (see examples/nomad-consul-workload-identity)."
+  echo -e "  --enable-vault\tIf set, enable Vault integration using workload identity (JWT). Optional. Requires --vault-addr and a Vault JWT auth method/role (see examples/nomad-vault-workload-identity). Default is off. The legacy --vault-role and --vault-token are ignored (Nomad 1.10 removed token-based Vault auth)."
+  echo -e "  --vault-addr\t\tThe address of the Vault server. Required if --enable-vault is set."
   echo
   echo "Example:"
   echo
@@ -268,6 +278,14 @@ function generate_nomad_config {
   local -r cluster_tag_value="${13}"
   local -r node_class="${14}"
   local -r node_name="${15}"
+  local -r enable_tls="${16:-false}"
+  local -r tls_ca_file="${17}"
+  local -r tls_cert_file="${18}"
+  local -r tls_key_file="${19}"
+  local -r enable_gossip_encryption="${20:-false}"
+  local -r gossip_encryption_key="${21}"
+  local -r enable_consul_wi="${22:-false}"
+  local -r node_pool="${23}"
 
   local readonly config_path="$config_dir/$NOMAD_CONFIG_FILE"
 
@@ -288,13 +306,20 @@ function generate_nomad_config {
   instance_region=$(get_instance_region "$metadata_token")
   availability_zone=$(get_instance_availability_zone "$metadata_token")
 
+  # gossip (serf) encryption is server-only in nomad
+  local gossip_config=""
+  if [[ "$enable_gossip_encryption" == "true" && -n "$gossip_encryption_key" ]]; then
+    gossip_config="encrypt = \"$gossip_encryption_key\""
+  fi
+
   local server_config=""
   if [[ "$server" == "true" ]]; then
     server_config=$(
       cat <<EOF
 server {
   enabled = true
-  bootstrap_expect = $num_servers 
+  bootstrap_expect = $num_servers
+  $gossip_config
 }
 EOF
     )
@@ -313,17 +338,30 @@ EOF
     )
   fi
 
+  # optional node pool for clients (nomad 1.6+). opt-in: empty by default = no node_pool line, so the
+  # client lands in the "default" pool exactly as before.
+  local node_pool_config=""
+  if [[ -n "$node_pool" ]]; then
+    log_info "Setting nomad node pool to $node_pool"
+    node_pool_config=$(
+      cat <<EOF
+node_pool = "$node_pool"
+EOF
+    )
+  fi
+
   local client_config=""
   if [[ "$client" == "true" ]]; then
 
     log_info "Creating client configuration"
 
-    
+
       client_config=$(
         cat <<EOF
 client {
   enabled = true
   $node_class_config
+  $node_pool_config
 }
 EOF
       )
@@ -343,6 +381,28 @@ EOF
     )
   fi
 
+  # optional consul workload identity defaults for jobs. additive: the agent still
+  # uses its own token below; only workloads switch to JWT-issued consul tokens.
+  # a consul jwt auth method must trust nomad's jwks endpoint (see the
+  # examples/nomad-consul-workload-identity terraform), and the audience here must
+  # match that auth method's bound audiences.
+  local consul_wi_config=""
+  if [[ "$enable_consul_wi" == "true" ]]; then
+    log_info "Adding consul workload identity (service + task) defaults"
+    consul_wi_config=$(
+      cat <<EOF
+  service_identity {
+    aud = ["consul.io"]
+    ttl = "1h"
+  }
+  task_identity {
+    aud = ["consul.io"]
+    ttl = "1h"
+  }
+EOF
+    )
+  fi
+
   local consul_config=""
   if [[ "$enable_acl" == "true" ]]; then
     local -r aws_region=$(aws_get_instance_region)
@@ -354,8 +414,12 @@ EOF
       consul_config=$(
         cat <<EOF
 consul {
-  address = "127.0.0.1:8500",
-  token = "$(read_acl_token "$consul_cluster_tag_value" "nomad" "$aws_region" 1 0)"
+  address = "127.0.0.1:8500"
+  # retry (default 60x5s) instead of a single shot: when the nomad servers run on a separate asg from
+  # the consul cluster, the consul "nomad" token may not be in ssm the instant we read it (it is minted
+  # right after consul acl bootstrap). a single try (was: 1 0) raced and aborted the box.
+  token = "$(read_acl_token "$consul_cluster_tag_value" "nomad" "$aws_region")"
+$consul_wi_config
 }
 EOF
       )
@@ -364,42 +428,33 @@ EOF
     consul_config=$(
       cat <<EOF
 consul {
- address = "127.0.0.1:8500"
- }
+  address = "127.0.0.1:8500"
+$consul_wi_config
+}
 EOF
     )
   fi
 
+  # vault integration is opt-in. nomad 1.10 removed token-based vault auth, so when
+  # enabled we use workload identity: nomad signs a jwt per task and vault exchanges
+  # it for a scoped token via a jwt auth method/role (see examples/nomad-vault-workload-identity).
+  # the audience must match that vault role's bound_audiences. servers no longer need a
+  # vault token, and the same config is used for servers and clients.
   local vault_config=""
   if [[ "$enable_vault" == "true" ]]; then
-    if [[ "$client" == "true" ]]; then
-      log_info "generating vault client config"
-      vault_config=$(
-        cat <<EOF
+    log_info "generating vault workload identity config"
+    vault_config=$(
+      cat <<EOF
 vault {
   enabled = true
   address = "$vault_addr"
-  create_from_role = "$vault_role"
+  default_identity {
+    aud = ["vault.io"]
+    ttl = "1h"
+  }
 }
 EOF
-      )
-    else
-      log_info "generating vault server config"
-      if [ -z "$vault_token" ] || [ "$vault_token" == "" ]; then
-        log_error "You must specify an option for the --vault-token parameter when --enable-vault and --server is specified."
-        exit 1
-      fi
-      vault_config=$(
-        cat <<EOF
-vault {
-  enabled = true
-  address = "$vault_addr"
-  token   = "$vault_token"
-  create_from_role = "$vault_role"
-}
-EOF
-      )
-    fi
+    )
   fi
 
   local telemetry_config=""
@@ -413,6 +468,26 @@ telemetry {
   prometheus_metrics = true
   publish_allocation_metrics = true
   publish_node_metrics = false
+}
+EOF
+    )
+  fi
+
+  # tls applies to both servers and clients; certs must already be present on the
+  # instance (bake into the AMI, drop via user-data, or issue from vault pki)
+  local tls_config=""
+  if [[ "$enable_tls" == "true" ]]; then
+    log_info "Creating TLS configuration"
+    tls_config=$(
+      cat <<EOF
+tls {
+  http = true
+  rpc  = true
+  ca_file   = "$tls_ca_file"
+  cert_file = "$tls_cert_file"
+  key_file  = "$tls_key_file"
+  verify_server_hostname = true
+  verify_https_client    = false
 }
 EOF
     )
@@ -437,6 +512,8 @@ $vault_config
 $consul_config
 
 $telemetry_config
+
+$tls_config
 EOF
   chown "$user:$user" "$config_path"
 }
@@ -563,6 +640,14 @@ function run {
   local consul_cluster_tag_value=""
   local vault_addr=""
   local enable_vault="false"
+  local enable_tls="false"
+  local tls_ca_file=""
+  local tls_cert_file=""
+  local tls_key_file=""
+  local enable_gossip_encryption="false"
+  local gossip_encryption_key=""
+  local enable_consul_wi="false"
+  local node_pool=""
 
   while [[ $# > 0 ]]; do
     local key="$1"
@@ -656,6 +741,11 @@ function run {
       node_class="$2"
       shift
       ;;
+    --node-pool)
+      assert_not_empty "$key" "$2"
+      node_pool="$2"
+      shift
+      ;;
     --skip-nomad-config)
       skip_nomad_config="true"
       ;;
@@ -677,6 +767,35 @@ function run {
       assert_not_empty "$key" "$2"
       acl_storage_type="$2"
       shift
+      ;;
+    --enable-tls)
+      enable_tls="true"
+      ;;
+    --tls-ca-file)
+      assert_not_empty "$key" "$2"
+      tls_ca_file="$2"
+      shift
+      ;;
+    --tls-cert-file)
+      assert_not_empty "$key" "$2"
+      tls_cert_file="$2"
+      shift
+      ;;
+    --tls-key-file)
+      assert_not_empty "$key" "$2"
+      tls_key_file="$2"
+      shift
+      ;;
+    --enable-gossip-encryption)
+      enable_gossip_encryption="true"
+      ;;
+    --gossip-encryption-key)
+      assert_not_empty "$key" "$2"
+      gossip_encryption_key="$2"
+      shift
+      ;;
+    --enable-consul-wi)
+      enable_consul_wi="true"
       ;;
     --help)
       print_usage
@@ -708,7 +827,7 @@ function run {
       ;;
 
     *)
-      if [ $storage_type_matched="false" ]; then
+      if [ "$storage_type_matched" == "false" ]; then
         log_error "ACL storage type '${acl_storage_type}' is not supported."
         exit 1
       fi
@@ -728,15 +847,26 @@ function run {
     exit 1
   fi
 
-  if [[ "$server" == "true" ]] && [[ "$enable_vault" == "true" ]]; then
-    assert_not_empty "--vault-addr" "$vault_addr"
-    assert_not_empty "--vault-role" "$vault_role"
-    assert_not_empty "--vault-token" "$vault_token"
+  # node pools apply to clients only; fail loudly rather than silently dropping the setting on a server.
+  if [[ -n "$node_pool" && "$client" != "true" ]]; then
+    log_error "--node-pool is only valid with --client"
+    exit 1
   fi
 
-  if [[ "$client" == "true" ]] && [[ "$enable_vault" == "true" ]]; then
+  # vault workload identity needs only the address; --vault-role and --vault-token
+  # are no longer used (nomad 1.10 removed token-based vault auth) and are ignored.
+  if [[ "$enable_vault" == "true" ]]; then
     assert_not_empty "--vault-addr" "$vault_addr"
-    assert_not_empty "--vault-role" "$vault_role"
+  fi
+
+  if [[ "$enable_tls" == "true" ]]; then
+    assert_not_empty "--tls-ca-file" "$tls_ca_file"
+    assert_not_empty "--tls-cert-file" "$tls_cert_file"
+    assert_not_empty "--tls-key-file" "$tls_key_file"
+  fi
+
+  if [[ "$enable_gossip_encryption" == "true" ]]; then
+    assert_not_empty "--gossip-encryption-key" "$gossip_encryption_key"
   fi
 
   if [[ -z "$use_sudo" ]]; then
@@ -773,7 +903,7 @@ function run {
   if [[ "$skip_nomad_config" == "true" ]]; then
     log_info "The --skip-nomad-config flag is set, so will not generate a default Nomad config file."
   else
-    generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class" "$node_name"
+    generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$enable_acl" "$consul_cluster_tag_value" "$enable_telemetry" "$enable_vault" "$vault_addr" "$vault_role" "$vault_token" "$cluster_tag_value" "$node_class" "$node_name" "$enable_tls" "$tls_ca_file" "$tls_cert_file" "$tls_key_file" "$enable_gossip_encryption" "$gossip_encryption_key" "$enable_consul_wi" "$node_pool"
   fi
 
   generate_systemd_config "$SYSTEMD_CONFIG_PATH" "$config_dir" "$data_dir" "$bin_dir" "$systemd_stdout" "$systemd_stderr" "$user" "$use_sudo" "${environment[@]}"

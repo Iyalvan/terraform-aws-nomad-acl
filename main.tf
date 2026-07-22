@@ -12,10 +12,16 @@
 # REQUIRE A SPECIFIC TERRAFORM VERSION OR HIGHER
 # ----------------------------------------------------------------------------------------------------------------------
 terraform {
-  # This module is now only being tested with Terraform 1.0.x. However, to make upgrading easier, we are setting
-  # 0.12.26 as the minimum version, as that version added support for required_providers with source URLs, making it
-  # forwards compatible with 1.0.x code.
-  required_version = ">= 0.12.26"
+  # pin to terraform 1.x and require aws provider >= 5.0 (aws_subnets, which
+  # replaced the removed aws_subnet_ids data source, needs provider v5+)
+  required_version = ">= 1.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+  }
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -50,7 +56,7 @@ data "aws_ami" "nomad_consul" {
 
   filter {
     name   = "name"
-    values = ["nomad-consul-ubuntu-*"]
+    values = ["nomad-consul-ubuntu*"]
   }
 }
 
@@ -60,7 +66,7 @@ data "aws_ami" "nomad_consul" {
 # ---------------------------------------------------------------------------------------------------------------------
 
 module "servers" {
-  source = "github.com/hashicorp/terraform-aws-consul//modules/consul-cluster?ref=v0.8.0"
+  source = "github.com/Iyalvan/terraform-aws-consul-acl//modules/consul-cluster?ref=master"
 
   cluster_name  = "${var.cluster_name}-server"
   cluster_size  = var.num_servers
@@ -71,10 +77,10 @@ module "servers" {
   cluster_tag_value = var.cluster_tag_value
 
   ami_id    = var.ami_id == null ? data.aws_ami.nomad_consul.image_id : var.ami_id
-  user_data = data.template_file.user_data_server.rendered
+  user_data = local.user_data_server
 
   vpc_id     = data.aws_vpc.default.id
-  subnet_ids = data.aws_subnet_ids.default.ids
+  subnet_ids = data.aws_subnets.default.ids
 
   # To make testing easier, we allow requests from any IP address here but in a production deployment, we strongly
   # recommend you limit this to the IP address ranges of known, trusted servers inside your VPC.
@@ -116,14 +122,13 @@ module "nomad_security_group_rules" {
 # This script will configure and start Consul and Nomad
 # ---------------------------------------------------------------------------------------------------------------------
 
-data "template_file" "user_data_server" {
-  template = file("${path.module}/examples/root-example/user-data-server.sh")
-
-  vars = {
+# templatefile() replaces the archived hashicorp/template provider
+locals {
+  user_data_server = templatefile("${path.module}/examples/root-example/user-data-server.sh", {
     cluster_tag_key   = var.cluster_tag_key
     cluster_tag_value = var.cluster_tag_value
     num_servers       = var.num_servers
-  }
+  })
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -151,10 +156,10 @@ module "clients" {
   desired_capacity = var.num_clients
 
   ami_id    = var.ami_id == null ? data.aws_ami.nomad_consul.image_id : var.ami_id
-  user_data = data.template_file.user_data_client.rendered
+  user_data = local.user_data_client
 
   vpc_id     = data.aws_vpc.default.id
-  subnet_ids = data.aws_subnet_ids.default.ids
+  subnet_ids = data.aws_subnets.default.ids
 
   # To make testing easier, we allow Consul and SSH requests from any IP address here but in a production
   # deployment, we strongly recommend you limit this to the IP address ranges of known, trusted servers inside your VPC.
@@ -179,7 +184,7 @@ module "clients" {
 # ---------------------------------------------------------------------------------------------------------------------
 
 module "consul_iam_policies" {
-  source = "github.com/hashicorp/terraform-aws-consul//modules/consul-iam-policies?ref=v0.8.0"
+  source = "github.com/Iyalvan/terraform-aws-consul-acl//modules/consul-iam-policies?ref=master"
 
   iam_role_id = module.clients.iam_role_id
 }
@@ -189,13 +194,12 @@ module "consul_iam_policies" {
 # This script will configure and start Consul and Nomad
 # ---------------------------------------------------------------------------------------------------------------------
 
-data "template_file" "user_data_client" {
-  template = file("${path.module}/examples/root-example/user-data-client.sh")
-
-  vars = {
+# templatefile() replaces the archived hashicorp/template provider
+locals {
+  user_data_client = templatefile("${path.module}/examples/root-example/user-data-client.sh", {
     cluster_tag_key   = var.cluster_tag_key
     cluster_tag_value = var.cluster_tag_value
-  }
+  })
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -210,8 +214,11 @@ data "aws_vpc" "default" {
   id      = var.vpc_id
 }
 
-data "aws_subnet_ids" "default" {
-  vpc_id = data.aws_vpc.default.id
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
 }
 
 data "aws_region" "current" {
