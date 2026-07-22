@@ -103,7 +103,7 @@ module "nomad_servers" {
 # ---------------------------------------------------------------------------------------------------------------------
 
 module "consul_iam_policies_servers" {
-  source = "github.com/hashicorp/terraform-aws-consul//modules/consul-iam-policies?ref=v0.8.0"
+  source = "github.com/Iyalvan/terraform-aws-consul-acl//modules/consul-iam-policies?ref=master"
 
   iam_role_id = module.nomad_servers.iam_role_id
 }
@@ -127,7 +127,7 @@ locals {
 # ---------------------------------------------------------------------------------------------------------------------
 
 module "consul_servers" {
-  source = "github.com/hashicorp/terraform-aws-consul//modules/consul-cluster?ref=v0.8.0"
+  source = "github.com/Iyalvan/terraform-aws-consul-acl//modules/consul-cluster?ref=master"
 
   cluster_name  = "${var.consul_cluster_name}-server"
   cluster_size  = var.num_consul_servers
@@ -212,7 +212,7 @@ module "nomad_clients" {
 # ---------------------------------------------------------------------------------------------------------------------
 
 module "consul_iam_policies_clients" {
-  source = "github.com/hashicorp/terraform-aws-consul//modules/consul-iam-policies?ref=v0.8.0"
+  source = "github.com/Iyalvan/terraform-aws-consul-acl//modules/consul-iam-policies?ref=master"
 
   iam_role_id = module.nomad_clients.iam_role_id
 }
